@@ -1,0 +1,460 @@
+<html>
+  <head>
+    <title>Isometric Scene Builder</title>
+    <meta http-equiv="Content-type" charset="UTF-8">
+    <script>
+
+      var ts=16;          // length of iso tile edge in pixels
+
+      // global lookup tables for mapping isometric
+      // tile coords to 2D pixel coords.
+      var map = new Array()
+      // pixel fill coords of right-side diamond of isometric voxel
+      var t_right = new Array();
+      // pixel fill coords of top-side diamond of isometric voxel
+      var t_top = new Array();
+      // pixel fill coords of left-side diamond of isometric voxel
+      var t_left = new Array();
+      // pixel coords of outline of top of isometric voxel
+      var o_top = new Array();
+      // ui graphics stuff
+      var div     = null;
+      var canvas  = null;
+      var ctx     = null;
+      // canvas width and height
+      var WW      = null;
+      var HH      = null;
+      var ui      = null;
+      // default color selection on startup
+      var gcolor = [0,255,0];
+
+      // Base class of a GUI widget with methods
+      // for drawing and doing mouse stuff.
+      class UIControl
+      {
+        // sf: pixel scaling factor
+        // (x,y): pixel coordinate of top-left corner of control
+        // (w,h): control's width and height
+        constructor(parent,sf,x,y,w,h)
+        {
+          this.kids = new Array();
+          this.sf=sf;
+          this.x=x;
+          this.y=y;
+          this.w=w;
+          this.h=h;
+          //ctx.fillStyle = "#404040";
+          //ctx.fillRect(x*sf, y*sf, w*sf,h*sf);
+        };
+        // draw a scaled pixel at (x,y) using current fill color
+        drawPix(x,y)
+        {
+          ctx.fillRect((this.x+x)*this.sf, (this.y+y)*this.sf, this.sf,this.sf);
+        }
+        // draw rectangle using current fill color
+        drawRect(x,y,w,h)
+        {
+          ctx.fillRect((this.x+x)*this.sf,(this.y+y)*this.sf, w*this.sf,h*this.sf);
+        }
+        // get current mouse position in pixels
+        getMousePos(canvas, evt) 
+        {
+          var rect = canvas.getBoundingClientRect();
+          return {
+            x: evt.clientX - rect.left,
+            y: evt.clientY - rect.top
+          };
+        }
+        // get current mouse position and adjust by
+        // pixel scaling factor of the control.
+        scaleMP(e)
+        {
+          var mp=this.getMousePos(canvas,e);
+          var sx=Math.floor((mp.x-this.x)/this.sf);
+          var sy=Math.floor((mp.y-this.y)/this.sf);
+          return {
+            x: sx,
+            y: sy
+          };
+        }
+        // returns true if the mouse pointer
+        // pointer is within bounds on control.
+        inBounds(e)
+        {
+          var sp=this.scaleMP(e);
+          if((sp.x>=0)&&(sp.x<this.w)&&(sp.y>=0)&&(sp.y<this.h))
+            return true;
+          else
+            return false;
+        }
+        // methods overridden by subclass
+        mouseDown(e)
+        {
+        };
+        mouseMove(e)
+        {
+        };
+        mouseUp(e)
+        {
+        };
+      };
+
+      // Implements an RGB color picker in the form of 
+      // an isometric cube. Select color by clicking top of
+      // cube, change green-level by dragging top of cube
+      // up or down.
+
+      class ColorCube extends UIControl
+      {
+        constructor(parent,sf,x,y)
+        {
+          super(parent,sf,x,y,ts*16,ts*16);
+          //ctx.fillStyle = "#202020";
+          //this.drawRect(0, 0, this.w,this.h);          
+          this.hlIdx=null;
+          this.selIdx=0;
+          this.sliceIdx=7;
+          this.active=false;
+          this.selColor=[0,255,0];
+          this.slices = new Array();
+          this.sliceCoords = new Array();
+          this.sliceColors = new Array();
+
+          for(var g=0;g<8;g++) // green channel (one per selectable layercake layer)
+          {
+            var layerCoords = new Array();
+            var layerColors = new Array();
+            for(var r=0;r<8;r++)          // red channel
+              for(var b=0;b<8;b++)        // blue channel
+              {
+                // calculate color
+                var rr=Math.floor(r*255/7);
+                var gg=Math.floor(g*255/7);
+                var bb=Math.floor(b*255/7);
+                // calculate iso stuff
+                var i=r+b*8;
+                var sx=map[i][0];
+                var sy=map[i][1];
+                var ssy=sy+ts*7-g*ts;
+                layerCoords.push([sx,ssy]);
+                layerColors.push([rr,gg,bb]);
+                ctx.fillStyle = 'rgba('+rr+','+gg+','+bb+',1.0)';
+                // draw iso voxel for this color
+                for(var i=0;i<t_left.length;i++)
+                {
+                  var rt=t_right[i];
+                  var lt=t_left[i];
+                  var tp=t_top[i];
+                  this.drawPix(sx+lt[0], (ssy+lt[1])+ts/2); 
+                  this.drawPix(sx+rt[0]+ts, ssy+rt[1]+ts/2); 
+                  this.drawPix(sx+tp[0], ssy+tp[1]); 
+                }
+              } // done drawing a layercake layer of voxels
+            // cache a pic of the cake with this 
+            // layer on top (selected by dragging up/down)
+            this.sliceCoords.push(layerCoords);
+            this.sliceColors.push(layerColors);
+            this.slices.push(ctx.getImageData(this.x*sf,this.y*sf,this.w*sf,this.h*sf));
+          }
+          this.draw();          
+        }
+        // draw color picker with the selected layer
+        // on top and the selected color voxel's top outlined
+        draw()
+        {
+          ctx.putImageData(this.slices[this.sliceIdx],this.x*this.sf,this.y*this.sf);
+          if(this.selIdx!=null)
+            this.highlightVoxel(this.selIdx);
+          if(this.selColor!=null)
+          {
+            var rr=this.selColor[0];
+            var gg=this.selColor[1];
+            var bb=this.selColor[2];
+            ctx.fillStyle = 'rgba('+rr+','+gg+','+bb+',1.0)';
+            this.drawRect(0,0,32,32);
+          }
+        }
+        getSelectedVoxel(e)
+        {
+          var coords = this.sliceCoords[this.sliceIdx];
+          var mc=this.scaleMP(e);
+          var cx=mc.x;
+          var cy=mc.y;
+          var bestdist=999999999;
+          var vidx = null;                       
+          for(var i=0;i<coords.length;i++)
+          {
+            var crd = coords[i];
+            var dx=cx-(crd[0]+ts);
+            var dy=cy-(crd[1]+ts/2);
+            var dist = Math.sqrt(dx*dx+dy*dy);
+            if (dist<bestdist)
+            {
+              bestdist=dist;
+              vidx=i;
+            }
+          }
+          return vidx;
+        }
+        // draw a (diamond-shaped) outline around 
+        // one color on the top of color cube.
+        highlightVoxel(vidx)
+        {
+          var coords = this.sliceCoords[this.sliceIdx];
+          var colors = this.sliceColors[this.sliceIdx];
+          // brighter colors get a black outline, and
+          // the rest get a white outline.
+          if (this.sliceIdx>3)
+            ctx.fillStyle = 'rgba(0,0,0,1.0)';
+          else
+            ctx.fillStyle = 'rgba(255,255,255,1.0)';
+          var x=coords[vidx][0];
+          var y=coords[vidx][1];  
+          var otp=o_top;
+          for(var i=0;i<otp.length;i++)
+              this.drawPix(x+otp[i][0],y+otp[i][1]);
+        }
+        // if mouse clicked inside this control, 
+        // make a note of it.
+        mouseDown(e)
+        {
+          if(this.inBounds(e))
+          {
+            this.active=true;
+            this.downPos=this.scaleMP(e);
+            this.downSlice=this.sliceIdx;
+          } else
+          {
+            this.active=false;
+          }
+        }
+        // if mouse cursor has moved after 
+        // mouse button was depressed within 
+        // this control
+        mouseMove(e)
+        {
+          if(this.active) // dragging on cube changes top slice
+          {
+            var curpos = this.scaleMP(e);
+            var dif=(curpos.y-this.downPos.y)/ts;
+            var nsi=Math.floor(this.downSlice-dif);
+            if(nsi<0) nsi=0;
+            if(nsi>7) nsi=7;
+            if(this.sliceIdx!=nsi)
+            {
+              this.selIdx=null;
+              this.sliceIdx=nsi;
+              this.draw();
+            }
+          }
+          // show closest color voxel to cursor position
+          if(this.inBounds(e))
+          {
+            var vidx=this.getSelectedVoxel(e);
+            if(vidx!=this.hlIdx)
+            {
+              this.hlIdx=vidx;
+              this.draw();            
+              this.highlightVoxel(vidx);
+            }
+          } else
+          {
+            if(this.hlIdx!=null)
+            {
+              this.hlIdx=null;
+              this.draw();
+            }
+          }
+        } 
+        // if mouse button was pressed and then
+        // released within this control, update
+        // color selection.
+        mouseUp(e)
+        {
+          if(this.active)
+          {
+            if(this.inBounds(e))
+            {
+              var vidx=this.getSelectedVoxel(e);
+              this.selIdx=vidx;
+              this.selColor=this.sliceColors[this.sliceIdx][vidx];
+              gcolor=this.selColor;
+              this.draw();                          
+            }
+          }
+          this.active=false;
+        } 
+
+      };
+
+      class TileEdit extends UIControl
+      {
+        constructor(parent,sf,x,y)
+        {
+          super(parent,sf,x,y,ts*2,ts*2);
+          this.active=false;
+          //ctx.fillStyle = "#202020";
+          //this.drawRect(0, 0, this.w,this.h);
+          ctx.fillStyle = "#ff0000";          
+          for(var i=0;i<t_top.length;i++)
+          {
+            var rt=t_right[i];
+            var lt=t_left[i];            
+            var tp=t_top[i];
+            ctx.fillStyle = "#808080";          
+            this.drawPix(rt[0], rt[1]); 
+            ctx.fillStyle = "#606060";          
+            this.drawPix(lt[0]+ts, lt[1]); 
+            ctx.fillStyle = "#a0a0a0";          
+            this.drawPix(tp[0], tp[1]+ts); 
+          }
+          this.bg=ctx.getImageData(this.x*sf,this.y*sf,this.w*sf,this.h*sf)        
+        }
+        mouseDown(e)
+        {
+          if(this.inBounds(e))
+          {
+            this.active=true;
+            this.downPos=this.scaleMP(e);
+            var rr=gcolor[0];
+            var gg=gcolor[1];
+            var bb=gcolor[2];
+            ctx.fillStyle = 'rgba('+rr+','+gg+','+bb+',1.0)';
+            this.drawPix(this.downPos.x,this.downPos.y)
+          } else
+          {
+            this.active=false;
+          }
+        }
+        mouseMove(e)
+        {
+          if((this.active)&&(this.inBounds(e))) // dragging on cube changes top slice
+          {
+            var curpos = this.scaleMP(e);
+            var rr=gcolor[0];
+            var gg=gcolor[1];
+            var bb=gcolor[2];
+            ctx.fillStyle = 'rgba('+rr+','+gg+','+bb+',1.0)';
+            this.drawPix(curpos.x,curpos.y)
+
+          }
+          // show closest color voxel
+          /*
+          if(this.inBounds(e))
+          {
+            var vidx=this.getSelectedVoxel(e);
+            if(vidx!=this.hlIdx)
+            {
+              this.hlIdx=vidx;
+              this.draw();            
+              this.highlightVoxel(vidx);
+            }
+          } else
+          {
+            if(this.hlIdx!=null)
+            {
+              this.hlIdx=null;
+              this.draw();
+            }
+          }
+          */
+        } 
+        mouseUp(e)
+        {
+          /*
+          if(this.active)
+          {
+            if(this.inBounds(e))
+            {
+              var vidx=this.getSelectedVoxel(e);
+              this.selIdx=vidx;
+              this.selColor=this.sliceColors[this.sliceIdx][vidx];
+              gcolor=this.selColor;
+              this.draw();                          
+            }
+          }
+          */
+          this.active=false;
+        }         
+      };
+
+      function main()
+      {
+        div     = document.getElementById('graph');
+        canvas  = document.getElementById('canvas');
+        ctx     = canvas.getContext('2d');  
+        WW      = canvas.width = div.clientWidth;
+        HH      = canvas.height = div.clientHeight;        
+        ctx.fillStyle = "#202020";
+        ctx.fillRect(0, 0, WW,HH); 
+
+        // Calc 2D pixel coords of a flat 8x8
+        // grid of isometric tiles. (One layer
+        // of color picker cube)
+        var sx=112*ts/16;//-y*ts;
+        var sy=0;
+        for(y=0;y<8;y++)
+        {          
+          for(x=0;x<8;x++)
+          {
+            map.push([sx+x*ts,sy+x*ts/2]);
+          }
+          sx-=ts;
+          sy+=ts/2;
+        }
+        // make an outline of a horizontal iso tile.
+        // (used as selection cursor on color picker)
+        for(var y=0;y<ts;y++)
+        {
+          var si=ts-Math.floor((y+1)/2)*2.0;
+          var sj=Math.floor(y/2);
+          for(var x=0;x<ts;x++)
+          {
+            var i=si+x;
+            var j=sj+Math.floor(x/2);
+            t_top.push([i,j]);
+            if((x==0)||(y==0)||(x==(ts-1))||(y==ts-1))
+              o_top.push([i,j])
+          }
+        }
+
+        for(var y=0;y<ts;y++)
+          for(var x=0;x<ts;x++)
+          {
+            var i=x;
+            var j=Math.floor((ts-1)/2)-Math.floor(x/2)+y;
+            t_right.push([i,j]);
+            j=Math.floor(x/2)+y;
+            t_left.push([i,j]);
+          }
+
+        var te = new TileEdit(null,8,0,0);
+        ui = new ColorCube(null,1,0,ts*16);
+        canvas.onmousedown = function(e)
+        {
+          ui.mouseDown(e);
+          te.mouseDown(e);
+        }
+
+        canvas.onmouseup = function(e)
+        {
+          ui.mouseUp(e);
+          te.mouseUp(e);
+        }
+
+        canvas.onmousemove = function(e)
+        {
+          ui.mouseMove(e);
+          te.mouseMove(e);
+        }
+
+      }
+    </script>        
+  </head>
+  <body bgcolor="#001820" onload="main()">
+    <div id="graph" width="100%" height="100%" style="font-family: Monospace;font-size:12;font-style:bold;color:aqua;">
+      <canvas id="canvas" width="100%" height="100%" style="border: 0px solid rgb(0, 255, 255); width: 100%; height: 96%;"></canvas>
+    </div>      
+  </body>
+</html>
+
