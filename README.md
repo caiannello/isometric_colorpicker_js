@@ -8,4 +8,4 @@
 - Load HTML file in Browser
 - Click a color on the top of the cube to select that color. 
 - Click and drag the top of cube to expose lower layers of cube.
-
+- Drag in gray isometric drawing area to paint in selected color.
